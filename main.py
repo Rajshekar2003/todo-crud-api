@@ -65,23 +65,29 @@ def get_task(task_id: int):
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return dict(row)
 
-# --- The endpoints below still use the old in-memory list — Stage 2/3 will update them ---
+@app.post("/tasks", status_code=201)
+def create_task(task: TaskCreate):
+    if not task.title or not task.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    conn = get_db_connection()
+    cursor = conn.execute(
+        "INSERT INTO tasks (title, done) VALUES (?, ?)",
+        (task.title, 0)
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    new_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (new_id,)).fetchone()
+    conn.close()
+    return dict(new_row)
+
+# --- The endpoints below still use the old in-memory list — Stage 3 will update them ---
 
 tasks = [
     {"id": 1, "title": "Buy milk", "done": False},
     {"id": 2, "title": "Walk the dog", "done": True},
     {"id": 3, "title": "Finish assignment", "done": False},
 ]
-
-@app.post("/tasks", status_code=201)
-def create_task(task: TaskCreate):
-    if not task.title or not task.title.strip():
-        raise HTTPException(status_code=400, detail="Title is required")
-    
-    new_id = max((t["id"] for t in tasks), default=0) + 1
-    new_task = {"id": new_id, "title": task.title, "done": False}
-    tasks.append(new_task)
-    return new_task
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: int, update: TaskUpdate):
