@@ -34,13 +34,6 @@ init_db()
 
 app = FastAPI()
 
-# our "database" — just a list in memory
-tasks = [
-    {"id": 1, "title": "Buy milk", "done": False},
-    {"id": 2, "title": "Walk the dog", "done": True},
-    {"id": 3, "title": "Finish assignment", "done": False},
-]
-
 class TaskCreate(BaseModel):
     title: str | None = None
 
@@ -58,14 +51,27 @@ def health():
 
 @app.get("/tasks")
 def get_tasks():
-    return tasks
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM tasks").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 @app.get("/tasks/{task_id}")
 def get_task(task_id: int):
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return dict(row)
+
+# --- The endpoints below still use the old in-memory list — Stage 2/3 will update them ---
+
+tasks = [
+    {"id": 1, "title": "Buy milk", "done": False},
+    {"id": 2, "title": "Walk the dog", "done": True},
+    {"id": 3, "title": "Finish assignment", "done": False},
+]
 
 @app.post("/tasks", status_code=201)
 def create_task(task: TaskCreate):
