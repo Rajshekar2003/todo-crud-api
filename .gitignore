@@ -2,3 +2,4 @@
 __pycache__/
 body.json
 tasks.db
+.env
