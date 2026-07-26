@@ -1,24 +1,30 @@
 # Task API
 
-A CRUD API for managing a to-do list, built with FastAPI and backed by a SQLite database. Built as part of the FlyRank Backend Track internship (Week 2: in-memory CRUD, Week 3: connected to SQLite).
+A CRUD API for managing a to-do list, built with FastAPI, running against a containerized PostgreSQL database via Docker Compose. Built as part of the FlyRank Backend Track internship — three storage stages: in-memory (Week 2), SQLite (Week 3), and now Postgres in Docker.
 
 ## What this is
-A REST API supporting full CRUD on tasks: create, read, update, and delete. Data is stored persistently in a SQLite database (`tasks.db`), so it survives server restarts. Includes interactive Swagger UI docs.
-
-## Why SQLite
-SQLite was chosen because it's a single file with zero setup — no separate database server to install or run. It's perfect for a small project like this: the whole database is just `tasks.db`, created automatically the first time the app runs.
-
-## Where the database lives
-`tasks.db` is created automatically in the project folder the first time you run the app. It's git-ignored, so every fresh clone of this repo starts with a brand new, empty database that seeds itself with 3 example tasks.
+A REST API supporting full CRUD on tasks: create, read, update, and delete. Data is stored in a real PostgreSQL database running in a Docker container, so it survives both server restarts and full container teardowns. The whole stack (app + database) starts with a single command.
 
 ## How to run it
+
+1. Copy the example environment file:
 ```bash
-python3 -m venv venv
-source venv/bin/activate       # Windows: venv\Scripts\Activate.ps1
-pip install fastapi uvicorn
-uvicorn main:app --reload
+   cp .env.example .env
 ```
-Then visit `http://localhost:8000/docs` for the interactive docs. `tasks.db` will be created automatically on first run, seeded with 3 example tasks.
+2. Start everything with Docker Compose:
+```bash
+   docker compose up
+```
+3. Visit `http://localhost:8000/docs` for the interactive Swagger docs.
+
+That's it — no local Python install, no manual database setup. Docker builds the app image and starts Postgres automatically, creates the `tasks` table, and seeds 3 example tasks on first run.
+
+## Environment variables
+See `.env.example` for the required variable:
+```
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+```
+`.env` is git-ignored — never commit real secrets. Inside Docker Compose, the app reaches the database using the service name `db` instead of `localhost` (see `compose.yaml`).
 
 ## Endpoints
 
@@ -35,29 +41,30 @@ Then visit `http://localhost:8000/docs` for the interactive docs. `tasks.db` wil
 ## Example request
 
 ```
-$ curl -i http://localhost:8000/tasks/2
+$ curl -i http://localhost:8000/tasks
 HTTP/1.1 200 OK
 content-type: application/json
 
-{"id":2,"title":"Walk the dog","done":1}
+[{"id":1,"title":"Buy milk","done":false},{"id":2,"title":"Walk the dog","done":true},{"id":3,"title":"Finish assignment","done":false},{"id":4,"title":"Test persistence","done":false}]
 ```
 
 ## Swagger UI
 
 ![Swagger UI](swagger-screenshot.png)
 
-## Exploring the database directly
+## Data in Postgres
 
-Data can also be viewed and edited directly using [DB Browser for SQLite](https://sqlitebrowser.org/). Example query run in Stage 4:
-
-```sql
-UPDATE tasks SET done = 1;
+Verified directly inside the running container:
 ```
-This marked every task as done, with 3 rows affected. After saving, the API immediately reflected the change on the next request — confirming the API and DB Browser read and write the same underlying file.
+docker exec -it todo-api-db-1 psql -U postgres -d tasks -c "SELECT * FROM tasks;"
+```
 
-![Database in DB Browser](db-screenshot.png)
+![Postgres data](docker-db-screenshot.png)
+
+## Persistence proof
+Created a task, ran `docker compose down` (fully removing both containers), then `docker compose up` again — the task was still there. This confirms the named volume (`taskdata`) keeps the database's actual data safe independent of the containers' lifecycle.
 
 ## Notes
-- All CRUD operations use parameterized SQL queries (`?` placeholders) to safely handle user input.
-- The database and table are created automatically if missing; 3 example tasks are seeded only when the table is empty, so restarting the server never duplicates them.
-- Data now survives a server restart — this was the core limitation fixed in this stage (previously, an in-memory list reset on every restart).
+- All queries use parameterized placeholders (`%s`) to safely handle user input.
+- The database and table are created automatically on first run; 3 example tasks are seeded only when the table is empty.
+- This is the third storage engine this project has used (in-memory → SQLite → Postgres) with the API itself never changing — proof that storage is just an implementation detail underneath a stable interface.
