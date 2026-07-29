@@ -4,10 +4,17 @@ from psycopg.rows import dict_row
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from supabase import create_client, Client
 
 load_dotenv()  # reads variables from .env into the environment
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+# --- Supabase setup (NEW) ---
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- end Supabase setup ---
 
 def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
@@ -36,6 +43,8 @@ def init_db():
 init_db()
 
 app = FastAPI()
+
+print("Server running and connected to Supabase")  # NEW - Stage 0 checkpoint log
 
 class TaskCreate(BaseModel):
     title: str | None = None

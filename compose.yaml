@@ -8,14 +8,14 @@ services:
     depends_on:
       - db
     restart: on-failure
-
   db:
     image: postgres:16
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: tasks
     volumes:
       - taskdata:/var/lib/postgresql/data
-
 volumes:
   taskdata:
