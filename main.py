@@ -3,6 +3,7 @@ import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
 
@@ -103,14 +104,14 @@ def login(credentials: AuthCredentials):
 def public_info():
     return {"message": "Welcome stranger! This info is public."}
 
-# --- Auth middleware (NEW - Stage 4) ---
-def require_user(authorization: str | None = Header(default=None)):
-    """Reusable guard: verifies the bearer token and returns the Supabase user.
-    Apply this as a dependency to any route that should require login."""
-    if not authorization or not authorization.startswith("Bearer ") or len(authorization.split(" ")) != 2:
-        raise HTTPException(status_code=401, detail="Access token required")
+# --- Auth middleware (Stage 4, updated Stage 5 for Swagger bearer auth) ---
+bearer_scheme = HTTPBearer(description="Paste your access token here (no need to type 'Bearer', Swagger adds it).")
 
-    token = authorization.split(" ")[1]
+def require_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    """Reusable guard: verifies the bearer token and returns the Supabase user.
+    Apply this as a dependency to any route that should require login.
+    Using HTTPBearer makes Swagger UI show a lock icon + Authorize button."""
+    token = credentials.credentials if credentials else None
     if not token:
         raise HTTPException(status_code=401, detail="Access token required")
 
