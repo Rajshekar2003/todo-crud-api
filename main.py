@@ -2,7 +2,7 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from supabase import create_client, Client
 
@@ -53,11 +53,9 @@ class TaskUpdate(BaseModel):
     title: str | None = None
     done: bool | None = None
 
-# --- Auth schemas (NEW - Stage 1) ---
 class AuthCredentials(BaseModel):
     email: str | None = None
     password: str | None = None
-# --- end auth schemas ---
 
 @app.get("/")
 def root():
@@ -67,7 +65,6 @@ def root():
 def health():
     return {"status": "ok"}
 
-# --- Auth routes (NEW - Stage 1) ---
 @app.post("/auth/signup", status_code=201)
 def signup(credentials: AuthCredentials):
     if not credentials.email or not credentials.password:
@@ -100,7 +97,24 @@ def login(credentials: AuthCredentials):
         "access_token": result.session.access_token,
         "refresh_token": result.session.refresh_token
     }
-# --- end auth routes ---
+
+# --- Public & protected gates (NEW - Stage 2) ---
+@app.get("/public/info")
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+@app.get("/protected/profile")
+def get_profile(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer ") or len(authorization.split(" ")) != 2:
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    token = authorization.split(" ")[1]
+    if not token:
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    # NOTE: not verified yet - that happens in Stage 3
+    return {"message": "token was present, not yet verified"}
+# --- end public & protected gates ---
 
 @app.get("/tasks")
 def get_tasks():
