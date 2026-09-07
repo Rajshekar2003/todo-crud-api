@@ -2,7 +2,7 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 from supabase import create_client, Client
 
@@ -103,8 +103,10 @@ def login(credentials: AuthCredentials):
 def public_info():
     return {"message": "Welcome stranger! This info is public."}
 
-@app.get("/protected/profile")
-def get_profile(authorization: str | None = Header(default=None)):
+# --- Auth middleware (NEW - Stage 4) ---
+def require_user(authorization: str | None = Header(default=None)):
+    """Reusable guard: verifies the bearer token and returns the Supabase user.
+    Apply this as a dependency to any route that should require login."""
     if not authorization or not authorization.startswith("Bearer ") or len(authorization.split(" ")) != 2:
         raise HTTPException(status_code=401, detail="Access token required")
 
@@ -120,12 +122,26 @@ def get_profile(authorization: str | None = Header(default=None)):
     if result is None or result.user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    user = result.user
+    return result.user
+# --- end auth middleware ---
+
+@app.get("/protected/profile")
+def get_profile(user=Depends(require_user)):
     return {
         "id": user.id,
         "email": user.email,
         "created_at": user.created_at
     }
+
+@app.get("/protected/dashboard")
+def get_dashboard(user=Depends(require_user)):
+    return {
+        "message": f"Welcome to your dashboard, {user.email}!"
+    }
+
+@app.post("/auth/logout", status_code=204)
+def logout(user=Depends(require_user)):
+    supabase.auth.sign_out()
 # --- end public & protected gates ---
 
 @app.get("/tasks")
