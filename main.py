@@ -10,7 +10,7 @@ load_dotenv()  # reads variables from .env into the environment
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-# --- Supabase setup (NEW) ---
+# --- Supabase setup ---
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -44,7 +44,7 @@ init_db()
 
 app = FastAPI()
 
-print("Server running and connected to Supabase")  # NEW - Stage 0 checkpoint log
+print("Server running and connected to Supabase")
 
 class TaskCreate(BaseModel):
     title: str | None = None
@@ -53,6 +53,12 @@ class TaskUpdate(BaseModel):
     title: str | None = None
     done: bool | None = None
 
+# --- Auth schemas (NEW - Stage 1) ---
+class AuthCredentials(BaseModel):
+    email: str | None = None
+    password: str | None = None
+# --- end auth schemas ---
+
 @app.get("/")
 def root():
     return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
@@ -60,6 +66,41 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+# --- Auth routes (NEW - Stage 1) ---
+@app.post("/auth/signup", status_code=201)
+def signup(credentials: AuthCredentials):
+    if not credentials.email or not credentials.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    try:
+        result = supabase.auth.sign_up({
+            "email": credentials.email,
+            "password": credentials.password
+        })
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return result.user
+
+@app.post("/auth/login")
+def login(credentials: AuthCredentials):
+    if not credentials.email or not credentials.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    try:
+        result = supabase.auth.sign_in_with_password({
+            "email": credentials.email,
+            "password": credentials.password
+        })
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid login credentials")
+
+    return {
+        "access_token": result.session.access_token,
+        "refresh_token": result.session.refresh_token
+    }
+# --- end auth routes ---
 
 @app.get("/tasks")
 def get_tasks():
