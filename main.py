@@ -98,7 +98,7 @@ def login(credentials: AuthCredentials):
         "refresh_token": result.session.refresh_token
     }
 
-# --- Public & protected gates (NEW - Stage 2) ---
+# --- Public & protected gates ---
 @app.get("/public/info")
 def public_info():
     return {"message": "Welcome stranger! This info is public."}
@@ -112,8 +112,20 @@ def get_profile(authorization: str | None = Header(default=None)):
     if not token:
         raise HTTPException(status_code=401, detail="Access token required")
 
-    # NOTE: not verified yet - that happens in Stage 3
-    return {"message": "token was present, not yet verified"}
+    try:
+        result = supabase.auth.get_user(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if result is None or result.user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = result.user
+    return {
+        "id": user.id,
+        "email": user.email,
+        "created_at": user.created_at
+    }
 # --- end public & protected gates ---
 
 @app.get("/tasks")
