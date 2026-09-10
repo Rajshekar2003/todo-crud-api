@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import time
 import json
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from pydantic import BaseModel, ValidationError, HttpUrl
 USER_AGENT = "FlyRankInternshipA9/1.0 (+https://github.com/Rajshekar2003/todo-crud-api)"
 TIMEOUT_SECONDS = 10
 REQUEST_DELAY_SECONDS = 0.5
+RETRY_WAIT_SECONDS = 2
+NO_RETRY_STATUS_CODES = {404, 403}
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
@@ -20,11 +23,30 @@ BASE_CATALOGUE_URL = "https://books.toscrape.com/catalogue/page-1.html"
 MAX_CATALOGUE_PAGES = 3
 
 
+class FetchError(Exception):
+    """Raised when a page could not be fetched, after retries where appropriate."""
+    def __init__(self, url: str, reason: str):
+        self.url = url
+        self.reason = reason
+        super().__init__(f"{url}: {reason}")
+
+
+# --- run-wide counters used by the final report ---
+run_stats = {
+    "pages_fetched": 0,      # real network fetches
+    "cache_hits": 0,         # served from local cache
+    "failed_pages": [],      # list of {"url": ..., "reason": ...}
+}
+
+
 def fetch_page(url: str, cache_filename: str) -> str:
     """Fetch a page politely, using a local cache to avoid repeat requests
     to the real site while developing.
 
-    Returns the HTML content as a string.
+    Retries once on a timeout or server error (5xx). Does NOT retry a 404
+    (page does not exist) or a 403 (site said no).
+
+    Raises FetchError if the page could not be fetched.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(CACHE_DIR, cache_filename)
@@ -33,23 +55,47 @@ def fetch_page(url: str, cache_filename: str) -> str:
         with open(cache_path, "r", encoding="utf-8") as f:
             html = f.read()
         print(f"CACHE HIT: {url} ({len(html)} bytes)")
+        run_stats["cache_hits"] += 1
         return html
 
     headers = {"User-Agent": USER_AGENT}
-    response = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
+    attempts = 0
+    max_attempts = 2  # one try + one retry
 
-    if response.status_code != 200:
-        raise RuntimeError(f"Failed to fetch {url}: status {response.status_code}")
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            response = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
+        except requests.exceptions.Timeout:
+            if attempts < max_attempts:
+                print(f"TIMEOUT (retrying): {url}")
+                time.sleep(RETRY_WAIT_SECONDS)
+                continue
+            raise FetchError(url, "timed out after retry")
+        except requests.exceptions.RequestException as e:
+            raise FetchError(url, f"request failed: {e}")
 
-    response.encoding = "utf-8"  # the site doesn't always declare charset; force correct decoding
-    html = response.text
-    with open(cache_path, "w", encoding="utf-8") as f:
-        f.write(html)
+        if response.status_code == 200:
+            response.encoding = "utf-8"
+            html = response.text
+            with open(cache_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            print(f"FETCH: {url} ({len(html)} bytes)")
+            run_stats["pages_fetched"] += 1
+            time.sleep(REQUEST_DELAY_SECONDS)
+            return html
 
-    print(f"FETCH: {url} ({len(html)} bytes)")
+        if response.status_code in NO_RETRY_STATUS_CODES:
+            raise FetchError(url, f"status {response.status_code} - not retrying")
 
-    time.sleep(REQUEST_DELAY_SECONDS)
-    return html
+        if response.status_code >= 500 and attempts < max_attempts:
+            print(f"SERVER ERROR {response.status_code} (retrying): {url}")
+            time.sleep(RETRY_WAIT_SECONDS)
+            continue
+
+        raise FetchError(url, f"status {response.status_code}")
+
+    raise FetchError(url, "exhausted retries")
 
 
 def extract_book_links(html: str, page_url: str) -> list[str]:
@@ -124,7 +170,6 @@ def extract_raw_record(html: str, book_url: str, source_page: str) -> dict:
     rating_text = None
     if rating_tag:
         classes = rating_tag.get("class", [])
-        # classes look like ["star-rating", "Three"] - the rating word is the extra class
         rating_words = [c for c in classes if c != "star-rating"]
         rating_text = rating_words[0] if rating_words else None
 
@@ -148,13 +193,18 @@ def extract_raw_record(html: str, book_url: str, source_page: str) -> dict:
 
 
 def extract_all_raw_records(book_urls: list[str], source_page: str) -> list[dict]:
-    """Fetch and extract the raw record for every book URL."""
+    """Fetch and extract the raw record for every book URL. A single broken
+    page is logged and skipped - it does not stop the run."""
     records = []
     for book_url in book_urls:
         cache_filename = _cache_filename_for_book(book_url)
-        html = fetch_page(book_url, cache_filename)
-        record = extract_raw_record(html, book_url, source_page)
-        records.append(record)
+        try:
+            html = fetch_page(book_url, cache_filename)
+            record = extract_raw_record(html, book_url, source_page)
+            records.append(record)
+        except FetchError as e:
+            print(f"SKIPPING (failed): {e.url} - {e.reason}")
+            run_stats["failed_pages"].append({"url": e.url, "reason": e.reason})
 
     print(f"detail_pages={len(records)}")
     return records
@@ -198,8 +248,8 @@ def normalize_record(raw: dict) -> dict:
 def validate_records(raw_records: list[dict]) -> tuple[list[dict], list[dict]]:
     """Normalize and validate every record against the Book schema.
     Returns (valid_records, invalid_records_with_reason).
-    De-duplicates by product_url (the canonical identity) so a rerun
-    never produces more than one record per book.
+    De-duplicates by product_url so a rerun never produces more than one
+    record per book.
     """
     valid_by_url: dict[str, dict] = {}
     invalid: list[dict] = []
@@ -236,8 +286,47 @@ def store_records(valid_records: list[dict], invalid_records: list[dict]) -> Non
     print(f"invalid_records={len(invalid_records)}")
 
 
+# --- Stage 5: run report ---
+
+def write_run_report(start_time: datetime, valid_records: list[dict], invalid_records: list[dict]) -> None:
+    end_time = datetime.now(timezone.utc)
+    duration_seconds = (end_time - start_time).total_seconds()
+
+    report = {
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "duration_seconds": round(duration_seconds, 2),
+        "pages_fetched": run_stats["pages_fetched"],
+        "cache_hits": run_stats["cache_hits"],
+        "valid_records": len(valid_records),
+        "invalid_records": len(invalid_records),
+        "failed_pages": run_stats["failed_pages"],
+        "failed_page_count": len(run_stats["failed_pages"]),
+    }
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    report_path = os.path.join(OUTPUT_DIR, "run-report.json")
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+
+    print(f"failed_pages={len(run_stats['failed_pages'])}")
+    print(f"duration_seconds={report['duration_seconds']}")
+
+
 if __name__ == "__main__":
+    start_time = datetime.now(timezone.utc)
+
     book_urls = discover_all_book_urls()
+
+    # TEST HOOK: run with `python scraper/src/main.py --test-failure` to add
+    # one deliberately broken URL and prove the run survives it.
+    if "--test-failure" in sys.argv:
+        book_urls.append("https://books.toscrape.com/catalogue/this-book-does-not-exist_9999/index.html")
+        print("TEST MODE: injected one fake book URL on purpose")
+
     raw_records = extract_all_raw_records(book_urls, source_page=BASE_CATALOGUE_URL)
     valid_records, invalid_records = validate_records(raw_records)
     store_records(valid_records, invalid_records)
+git add scraper
+git commit -m "Stage 5: survive failures, report the run"
+git push
