@@ -327,6 +327,3 @@ if __name__ == "__main__":
     raw_records = extract_all_raw_records(book_urls, source_page=BASE_CATALOGUE_URL)
     valid_records, invalid_records = validate_records(raw_records)
     store_records(valid_records, invalid_records)
-git add scraper
-git commit -m "Stage 5: survive failures, report the run"
-git push
