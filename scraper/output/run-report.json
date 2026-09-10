@@ -1,0 +1,16 @@
+{
+  "start_time": "2026-09-10T07:20:43.277691+00:00",
+  "end_time": "2026-09-10T07:20:44.490581+00:00",
+  "duration_seconds": 1.21,
+  "pages_fetched": 0,
+  "cache_hits": 63,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": [
+    {
+      "url": "https://books.toscrape.com/catalogue/this-book-does-not-exist_9999/index.html",
+      "reason": "request failed: HTTPSConnectionPool(host='books.toscrape.com', port=443): Max retries exceeded with url: /catalogue/this-book-does-not-exist_9999/index.html (Caused by NameResolutionError(\"HTTPSConnection(host='books.toscrape.com', port=443): Failed to resolve 'books.toscrape.com' ([Errno 11001] getaddrinfo failed)\"))"
+    }
+  ],
+  "failed_page_count": 1
+}
