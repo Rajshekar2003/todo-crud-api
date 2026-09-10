@@ -1,5 +1,7 @@
 import os
 import time
+import json
+from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -36,6 +38,7 @@ def fetch_page(url: str, cache_filename: str) -> str:
     if response.status_code != 200:
         raise RuntimeError(f"Failed to fetch {url}: status {response.status_code}")
 
+    response.encoding = "utf-8"  # the site doesn't always declare charset; force correct decoding
     html = response.text
     with open(cache_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -93,5 +96,70 @@ def discover_all_book_urls() -> list[str]:
     return unique_links
 
 
+# --- Stage 3: extract raw book records ---
+
+def _cache_filename_for_book(book_url: str) -> str:
+    """Turn a book URL into a safe, unique local cache filename."""
+    slug = book_url.rstrip("/").split("/")[-2]
+    return f"book-{slug}.html"
+
+
+def extract_raw_record(html: str, book_url: str, source_page: str) -> dict:
+    """Parse a single book detail page and return its 8 raw fields."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    product_main = soup.select_one("div.product_main")
+    title = product_main.select_one("h1").get_text(strip=True) if product_main else None
+
+    price_tag = soup.select_one("p.price_color")
+    price_text = price_tag.get_text(strip=True) if price_tag else None
+
+    availability_tag = soup.select_one("p.availability")
+    availability_text = availability_tag.get_text(strip=True) if availability_tag else None
+
+    rating_tag = soup.select_one("p.star-rating")
+    rating_text = None
+    if rating_tag:
+        classes = rating_tag.get("class", [])
+        # classes look like ["star-rating", "Three"] - the rating word is the extra class
+        rating_words = [c for c in classes if c != "star-rating"]
+        rating_text = rating_words[0] if rating_words else None
+
+    description_heading = soup.select_one("#product_description")
+    description = None
+    if description_heading:
+        description_paragraph = description_heading.find_next_sibling("p")
+        if description_paragraph:
+            description = description_paragraph.get_text(strip=True)
+
+    return {
+        "title": title,
+        "product_url": book_url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def extract_all_raw_records(book_urls: list[str], source_page: str) -> list[dict]:
+    """Fetch and extract the raw record for every book URL."""
+    records = []
+    for book_url in book_urls:
+        cache_filename = _cache_filename_for_book(book_url)
+        html = fetch_page(book_url, cache_filename)
+        record = extract_raw_record(html, book_url, source_page)
+        records.append(record)
+
+    print(f"detail_pages={len(records)}")
+    return records
+
+
 if __name__ == "__main__":
-    discover_all_book_urls()
+    book_urls = discover_all_book_urls()
+    raw_records = extract_all_raw_records(book_urls, source_page=BASE_CATALOGUE_URL)
+
+    if raw_records:
+        print(json.dumps(raw_records[0], indent=2))
