@@ -1,10 +1,12 @@
 import os
+import re
 import time
 import json
 from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from pydantic import BaseModel, ValidationError, HttpUrl
 
 # --- Politeness settings ---
 USER_AGENT = "FlyRankInternshipA9/1.0 (+https://github.com/Rajshekar2003/todo-crud-api)"
@@ -12,6 +14,7 @@ TIMEOUT_SECONDS = 10
 REQUEST_DELAY_SECONDS = 0.5
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output")
 
 BASE_CATALOGUE_URL = "https://books.toscrape.com/catalogue/page-1.html"
 MAX_CATALOGUE_PAGES = 3
@@ -157,9 +160,84 @@ def extract_all_raw_records(book_urls: list[str], source_page: str) -> list[dict
     return records
 
 
+# --- Stage 4: clean, validate, store ---
+
+class Book(BaseModel):
+    """The clean, checked shape of one book record."""
+    title: str
+    product_url: HttpUrl
+    price_gbp: float
+    price_text: str
+    availability_text: str
+    rating_text: str
+    description: str | None
+    source_page: HttpUrl
+    fetched_at: str
+
+
+def normalize_price(price_text: str | None) -> float | None:
+    """Turn '£51.77' into 51.77. Returns None if it can't be parsed."""
+    if not price_text:
+        return None
+    match = re.search(r"[\d.]+", price_text)
+    if not match:
+        return None
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
+def normalize_record(raw: dict) -> dict:
+    """Add the clean price_gbp field alongside the original raw fields."""
+    normalized = dict(raw)
+    normalized["price_gbp"] = normalize_price(raw.get("price_text"))
+    return normalized
+
+
+def validate_records(raw_records: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Normalize and validate every record against the Book schema.
+    Returns (valid_records, invalid_records_with_reason).
+    De-duplicates by product_url (the canonical identity) so a rerun
+    never produces more than one record per book.
+    """
+    valid_by_url: dict[str, dict] = {}
+    invalid: list[dict] = []
+
+    for raw in raw_records:
+        normalized = normalize_record(raw)
+        try:
+            book = Book(**normalized)
+        except ValidationError as e:
+            invalid.append({
+                "record": raw,
+                "reason": str(e),
+            })
+            continue
+
+        canonical_url = str(book.product_url)
+        valid_by_url[canonical_url] = json.loads(book.model_dump_json())
+
+    return list(valid_by_url.values()), invalid
+
+
+def store_records(valid_records: list[dict], invalid_records: list[dict]) -> None:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    books_path = os.path.join(OUTPUT_DIR, "books.json")
+    with open(books_path, "w", encoding="utf-8") as f:
+        json.dump(valid_records, f, indent=2, ensure_ascii=False)
+
+    errors_path = os.path.join(OUTPUT_DIR, "errors.json")
+    with open(errors_path, "w", encoding="utf-8") as f:
+        json.dump(invalid_records, f, indent=2, ensure_ascii=False)
+
+    print(f"valid_records={len(valid_records)}")
+    print(f"invalid_records={len(invalid_records)}")
+
+
 if __name__ == "__main__":
     book_urls = discover_all_book_urls()
     raw_records = extract_all_raw_records(book_urls, source_page=BASE_CATALOGUE_URL)
-
-    if raw_records:
-        print(json.dumps(raw_records[0], indent=2))
+    valid_records, invalid_records = validate_records(raw_records)
+    store_records(valid_records, invalid_records)
