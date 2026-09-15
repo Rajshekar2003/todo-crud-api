@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
+from src.llm.schema import BookInput, EnrichmentOutput
 
 load_dotenv()  # reads variables from .env into the environment
 
@@ -144,6 +145,56 @@ def get_dashboard(user=Depends(require_user)):
 def logout(user=Depends(require_user)):
     supabase.auth.sign_out()
 # --- end public & protected gates ---
+
+# --- Stage 1: /enrich endpoint (no model call yet) ---
+
+LLM_STUB = os.environ.get("LLM_STUB") == "1"
+
+
+@app.post("/enrich", response_model=EnrichmentOutput)
+def enrich_book(payload: dict):
+    # Manual validation so we can return 400 naming the offending field,
+    # instead of FastAPI's default 422 for automatic body parsing.
+    title = payload.get("title")
+    if not title or not isinstance(title, str) or not (1 <= len(title) <= 300):
+        raise HTTPException(status_code=400, detail="Field 'title' must be a string of 1-300 characters")
+
+    description = payload.get("description")
+    if description is not None and not isinstance(description, str):
+        raise HTTPException(status_code=400, detail="Field 'description' must be a string or null")
+
+    price_gbp = payload.get("price_gbp")
+    if price_gbp is None or not isinstance(price_gbp, (int, float)):
+        raise HTTPException(status_code=400, detail="Field 'price_gbp' must be a number")
+
+    rating_text = payload.get("rating_text")
+    valid_ratings = {"One", "Two", "Three", "Four", "Five"}
+    if not rating_text or rating_text not in valid_ratings:
+        raise HTTPException(status_code=400, detail="Field 'rating_text' must be one of One, Two, Three, Four, Five")
+
+    availability_text = payload.get("availability_text")
+    if not availability_text or not isinstance(availability_text, str):
+        raise HTTPException(status_code=400, detail="Field 'availability_text' must be a string")
+
+    book = BookInput(
+        title=title,
+        description=description,
+        price_gbp=price_gbp,
+        rating_text=rating_text,
+        availability_text=availability_text,
+    )
+
+    if LLM_STUB:
+        return EnrichmentOutput(
+            category="fiction",
+            summary="A stubbed summary standing in for a real model answer.",
+            quality_flags=["missing_description"] if not book.description else [],
+            confidence=0.42,
+        )
+
+    # Stage 2 will replace this with a real model call.
+    raise HTTPException(status_code=501, detail="Model call not implemented yet - set LLM_STUB=1 to test")
+# --- end /enrich endpoint ---
 
 @app.get("/tasks")
 def get_tasks():
