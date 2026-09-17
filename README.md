@@ -123,6 +123,15 @@ curl.exe -i -X POST http://localhost:8000/enrich -H "Content-Type: application/j
 
 Expected response: 400 Bad Request naming the missing field.
 
+## Stage 2 notes - what surprised me
+
+Ran the prompt on three real inputs:
+- A clear poetry book -> correctly categorized as "poetry" with 0.95 confidence, matching the prompt's own example almost exactly.
+- A book with no description -> correctly flagged "missing_description" and dropped confidence to 0.55, following the "when unsure" instruction.
+- A non-fiction history book -> correctly categorized as "non_fiction" with 0.98 confidence, distinguishing it from the fiction/poetry cases without being told the genre outright.
+
+One thing that surprised me: one response came back with a leading "\n\n" before the JSON started - a small reminder that model output can't be trusted to be clean JSON even when the prompt asks for exactly that. This is exactly why Stage 3 adds parsing, validation, and a repair retry before anything is returned to a caller.
+
 ## Swagger screenshot
 
 ![Swagger UI with bearer auth](swagger-screenshot.png)

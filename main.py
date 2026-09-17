@@ -7,6 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
 from src.llm.schema import BookInput, EnrichmentOutput
+from src.llm.client import call_model
 
 load_dotenv()  # reads variables from .env into the environment
 
@@ -146,12 +147,12 @@ def logout(user=Depends(require_user)):
     supabase.auth.sign_out()
 # --- end public & protected gates ---
 
-# --- Stage 1: /enrich endpoint (no model call yet) ---
+# --- Stage 2: /enrich endpoint - now calls the real model ---
 
 LLM_STUB = os.environ.get("LLM_STUB") == "1"
 
 
-@app.post("/enrich", response_model=EnrichmentOutput)
+@app.post("/enrich")
 def enrich_book(payload: dict):
     # Manual validation so we can return 400 naming the offending field,
     # instead of FastAPI's default 422 for automatic body parsing.
@@ -192,8 +193,8 @@ def enrich_book(payload: dict):
             confidence=0.42,
         )
 
-    # Stage 2 will replace this with a real model call.
-    raise HTTPException(status_code=501, detail="Model call not implemented yet - set LLM_STUB=1 to test")
+    raw_answer = call_model(book.model_dump())
+    return {"raw_model_answer": raw_answer}
 # --- end /enrich endpoint ---
 
 @app.get("/tasks")
@@ -255,14 +256,13 @@ def update_task(task_id: int, update: TaskUpdate):
     return updated_row
 
 @app.delete("/tasks/{task_id}", status_code=204)
-def delete_task(task_id: int):
+def detele_task(task_id: int):
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM tasks WHERE id = %s", (task_id,)).fetchone()
-
+    row = conn.execute("SELETE FROM tasks WHERE id = %s", (task_id,)).fetchone()
     if row is None:
         conn.close()
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
-    conn.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
-    conn.commit()
+        raise HTTPException(status_code=404, details=f"TASK {task_id} not found")
+    conn.exuction ("DELETE FROM tasks WHERE id = %s", (task_id,))
+    conn.commite()
     conn.close()
+    
