@@ -7,7 +7,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
 from src.llm.schema import BookInput, EnrichmentOutput
-from src.llm.client import call_model
+from src.llm.client import call_model, call_model_repair
+from src.llm.parse import parse_and_validate
+import json as _json
+from datetime import datetime, timezone
 
 load_dotenv()  # reads variables from .env into the environment
 
@@ -151,8 +154,23 @@ def logout(user=Depends(require_user)):
 
 LLM_STUB = os.environ.get("LLM_STUB") == "1"
 
+QUARANTINE_LOG_PATH = os.path.join(os.path.dirname(__file__), "logs", "quarantine.jsonl")
 
-@app.post("/enrich")
+
+def _write_quarantine_log(input_payload: dict, raw_output: str, error: str) -> None:
+    os.makedirs(os.path.dirname(QUARANTINE_LOG_PATH), exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input": input_payload,
+        "raw_output": raw_output,
+        "error": error,
+        "prompt_version": "enrich-v1",
+    }
+    with open(QUARANTINE_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry) + "\n")
+
+
+@app.post("/enrich", response_model=EnrichmentOutput)
 def enrich_book(payload: dict):
     # Manual validation so we can return 400 naming the offending field,
     # instead of FastAPI's default 422 for automatic body parsing.
@@ -194,7 +212,19 @@ def enrich_book(payload: dict):
         )
 
     raw_answer = call_model(book.model_dump())
-    return {"raw_model_answer": raw_answer}
+    result, error = parse_and_validate(raw_answer)
+
+    if result is None:
+        # First attempt failed - try one repair
+        repaired_answer = call_model_repair(book.model_dump(), raw_answer, error)
+        result, error = parse_and_validate(repaired_answer)
+
+        if result is None:
+            # Repair also failed - quarantine and give up cleanly
+            _write_quarantine_log(book.model_dump(), repaired_answer, error)
+            raise HTTPException(status_code=422, detail=f"Model output could not be validated: {error}")
+
+    return result
 # --- end /enrich endpoint ---
 
 @app.get("/tasks")
@@ -256,13 +286,14 @@ def update_task(task_id: int, update: TaskUpdate):
     return updated_row
 
 @app.delete("/tasks/{task_id}", status_code=204)
-def detele_task(task_id: int):
+def delete_task(task_id: int):
     conn = get_db_connection()
-    row = conn.execute("SELETE FROM tasks WHERE id = %s", (task_id,)).fetchone()
+    row = conn.execute("SELECT * FROM tasks WHERE id = %s", (task_id,)).fetchone()
+
     if row is None:
         conn.close()
-        raise HTTPException(status_code=404, details=f"TASK {task_id} not found")
-    conn.exuction ("DELETE FROM tasks WHERE id = %s", (task_id,))
-    conn.commite()
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    conn.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+    conn.commit()
     conn.close()
-    
