@@ -132,6 +132,13 @@ Ran the prompt on three real inputs:
 
 One thing that surprised me: one response came back with a leading "\n\n" before the JSON started - a small reminder that model output can't be trusted to be clean JSON even when the prompt asks for exactly that. This is exactly why Stage 3 adds parsing, validation, and a repair retry before anything is returned to a caller.
 
+## Stage 4 notes - reliability
+
+- **Timeout:** 30 seconds on the client (the SDK's own default is 10 minutes, which is not a real timeout for an HTTP endpoint).
+- **Retries:** the SDK's built-in automatic retries are explicitly disabled (`max_retries=0`); our own retry logic replaces it - retrying only on timeouts, 429, and 5xx, with exponential backoff (1s, 2s, 4s) plus jitter, and obeying a `Retry-After` header when the provider sends one. 400/401/403 are never retried.
+- **Observed:** one real call took ~15.6 seconds end to end on the free OpenRouter tier (676 input tokens, 139 output tokens) - a useful reminder that free-tier latency is real and the 30s timeout has real headroom, not a lot of it.
+- **Kill switch:** `LLM_ENABLED=false` skips the model entirely and returns a safe, deterministic fallback (`category: other`, `confidence: 0.0`) - verified zero model calls are made and no cost-log line is written when disabled.
+
 ## Swagger screenshot
 
 ![Swagger UI with bearer auth](swagger-screenshot.png)

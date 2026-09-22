@@ -7,8 +7,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
 from src.llm.schema import BookInput, EnrichmentOutput
-from src.llm.client import call_model, call_model_repair
+from src.llm.client import call_model, call_model_repair, ModelTimeoutError
 from src.llm.parse import parse_and_validate
+from openai import APIStatusError
 import json as _json
 from datetime import datetime, timezone
 
@@ -150,9 +151,10 @@ def logout(user=Depends(require_user)):
     supabase.auth.sign_out()
 # --- end public & protected gates ---
 
-# --- Stage 2: /enrich endpoint - now calls the real model ---
+# --- Stage 4: /enrich endpoint - real model call with timeout, retries, kill switch ---
 
 LLM_STUB = os.environ.get("LLM_STUB") == "1"
+LLM_ENABLED = os.environ.get("LLM_ENABLED", "true").lower() != "false"
 
 QUARANTINE_LOG_PATH = os.path.join(os.path.dirname(__file__), "logs", "quarantine.jsonl")
 
@@ -211,12 +213,34 @@ def enrich_book(payload: dict):
             confidence=0.42,
         )
 
-    raw_answer = call_model(book.model_dump())
+    if not LLM_ENABLED:
+        # Kill switch: skip the model entirely, return a safe deterministic
+        # fallback instead. Zero model calls made.
+        return EnrichmentOutput(
+            category="other",
+            summary="Enrichment is temporarily unavailable.",
+            quality_flags=[],
+            confidence=0.0,
+        )
+
+    try:
+        raw_answer = call_model(book.model_dump())
+    except ModelTimeoutError:
+        raise HTTPException(status_code=504, detail="Model call timed out")
+    except APIStatusError as e:
+        raise HTTPException(status_code=502, detail=f"LLM provider rejected the request: {e.status_code} {e.message}")
+
     result, error = parse_and_validate(raw_answer)
 
     if result is None:
         # First attempt failed - try one repair
-        repaired_answer = call_model_repair(book.model_dump(), raw_answer, error)
+        try:
+            repaired_answer = call_model_repair(book.model_dump(), raw_answer, error)
+        except ModelTimeoutError:
+            raise HTTPException(status_code=504, detail="Model call timed out during repair")
+        except APIStatusError as e:
+            raise HTTPException(status_code=502, detail=f"LLM provider rejected the request: {e.status_code} {e.message}")
+
         result, error = parse_and_validate(repaired_answer)
 
         if result is None:
