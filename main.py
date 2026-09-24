@@ -321,3 +321,97 @@ def delete_task(task_id: int):
     conn.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
     conn.commit()
     conn.close()
+
+    
+# --- PDF Report Generator (A8) ---
+import sqlite3 as _report_sqlite3
+from fastapi.responses import FileResponse, JSONResponse
+
+REPORT_DB_PATH = "report.db"
+
+def _get_report_db():
+    conn = _report_sqlite3.connect(REPORT_DB_PATH)
+    conn.row_factory = _report_sqlite3.Row
+    return conn
+
+def _init_reports_table():
+    conn = _get_report_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+_init_reports_table()
+
+@app.post("/reports")
+def create_report(force: bool = False):
+    from report_data import get_report_data
+    from render_report import get_all_orders, build_html
+    from playwright.sync_api import sync_playwright
+
+    conn = _get_report_db()
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    if not force:
+        existing = conn.execute(
+            "SELECT * FROM reports WHERE date(created_at) = ? ORDER BY id DESC LIMIT 1",
+            (today,),
+        ).fetchone()
+        if existing:
+            conn.close()
+            return JSONResponse(
+                status_code=200,
+                content={"id": existing["id"], "file": f"/reports/{existing['id']}/file"},
+            )
+
+    data = get_report_data()
+    all_orders = get_all_orders()
+    html = build_html(data, all_orders)
+
+    os.makedirs("reports", exist_ok=True)
+
+    cur = conn.execute(
+        "INSERT INTO reports (path, created_at) VALUES (?, ?)",
+        ("", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    report_id = cur.lastrowid
+
+    output_path = f"reports/{report_id}.pdf"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        page.pdf(path=output_path, format="A4", print_background=True)
+        browser.close()
+
+    conn.execute("UPDATE reports SET path = ? WHERE id = ?", (output_path, report_id))
+    conn.commit()
+    conn.close()
+
+    return JSONResponse(status_code=201, content={"id": report_id, "file": f"/reports/{report_id}/file"})
+
+@app.get("/reports/{report_id}")
+def get_report(report_id: int):
+    conn = _get_report_db()
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+    return {"id": row["id"], "created_at": row["created_at"], "file": f"/reports/{report_id}/file"}
+
+@app.get("/reports/{report_id}/file")
+def get_report_file(report_id: int):
+    conn = _get_report_db()
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+    return FileResponse(row["path"], media_type="application/pdf", filename=f"report-{report_id}.pdf")
+# --- end PDF Report Generator (A8) ---
