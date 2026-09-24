@@ -227,3 +227,8 @@ Also worth noting: when I deliberately edited the prompt to demand invalid categ
 | 422 | Model output could not be validated, even after one repair attempt |
 | 502 | The LLM provider rejected the request (e.g. bad API key) |
 | 504 | The LLM call timed out, even after retries |
+## Stage 5 notes
+
+**What the idempotency check protects against:** a user double-clicking "Generate report" (or a retried request after a network hiccup) creating multiple duplicate PDFs and duplicate rows for the same day, when only one report is needed.
+
+**Real-world cost example:** an e-commerce order-confirmation email sent twice to the same customer because the "place order" button was clicked twice - at best it looks unprofessional, at worst (e.g. a payment-charge endpoint without this same idempotency check) it charges the customer's card twice.
