@@ -431,6 +431,7 @@ import inngest.fast_api
 inngest_client = inngest.Inngest(
     app_id="report-api",
     is_production=False,
+    event_api_base_url="http://127.0.0.1:8288",
 )
 
 @inngest_client.create_function(
@@ -441,5 +442,56 @@ async def say_hello(ctx: inngest.Context) -> str:
     await ctx.step.sleep("wait-a-moment", _dt.timedelta(seconds=5))
     return "Hello from the background!"
 
-inngest.fast_api.serve(app, inngest_client, [say_hello])
 # --- end Inngest setup ---
+
+# --- Background reports (A7 Stages 2 & 3) ---
+from fastapi import Body
+
+reports_store: dict[str, dict] = {}
+
+@app.post("/background-reports", status_code=202)
+async def create_background_report(payload: dict = Body(...)):
+    topic = payload.get("topic")
+    if not topic or not isinstance(topic, str) or not topic.strip():
+        raise HTTPException(status_code=400, detail="Field 'topic' is required")
+
+    report_id = str(len(reports_store) + 1) + "-" + _dt.datetime.now(timezone.utc).strftime("%H%M%S%f")
+    reports_store[report_id] = {"id": report_id, "topic": topic, "status": "pending"}
+
+    await inngest_client.send(
+        inngest.Event(name="report/requested", data={"id": report_id, "topic": topic})
+    )
+
+    return {"id": report_id, "status": "pending"}
+
+@app.get("/background-reports/{report_id}")
+def get_background_report(report_id: str):
+    report = reports_store.get(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+    return report
+
+@inngest_client.create_function(
+    fn_id="make-report",
+    trigger=inngest.TriggerEvent(event="report/requested"),
+    retries=2,
+)
+async def make_report(ctx: inngest.Context) -> dict:
+    report_id = ctx.event.data["id"]
+    topic = ctx.event.data["topic"]
+
+    await ctx.step.sleep("do-the-slow-work", _dt.timedelta(seconds=8))
+
+    def _build_report():
+        if topic == "fail":
+            raise Exception("The report oven is broken!")
+        return {"topic": topic, "summary": f"A generated report about {topic}."}
+
+    result = await ctx.step.run("build-report", _build_report)
+
+    reports_store[report_id]["status"] = "done"
+    reports_store[report_id]["result"] = result
+    return result
+
+inngest.fast_api.serve(app, inngest_client, [say_hello, make_report])
+# --- end background reports ---
