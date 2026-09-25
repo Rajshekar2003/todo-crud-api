@@ -236,3 +236,7 @@ Also worth noting: when I deliberately edited the prompt to demand invalid categ
 ## Stage 3 notes
 
 A missing `topic` is a client input error (400) - retrying it would never succeed, so it's rejected immediately at the door with no job created. A `topic: "fail"` request, by contrast, is valid input hitting a transient-style failure inside the job - that's exactly what retries are for, so Inngest retries it (with backoff) before giving up.
+
+## Stage 3 notes
+
+A missing `topic` is a client input error (400) - retrying it would never succeed, so it's rejected immediately at the door with no job created. A `topic: "fail"` request, by contrast, is valid input hitting a transient-style failure inside the job - that's exactly what retries are for, so Inngest retries it (with backoff) before giving up.
