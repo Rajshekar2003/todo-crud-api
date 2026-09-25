@@ -20,11 +20,13 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 # --- Supabase setup ---
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+print("DEBUG: about to create supabase client", flush=True)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+print("DEBUG: supabase client created", flush=True)
 # --- end Supabase setup ---
 
 def get_db_connection():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=5)
 
 def init_db():
     conn = get_db_connection()
@@ -47,7 +49,12 @@ def init_db():
 
     conn.close()
 
-init_db()
+print("DEBUG: about to init_db", flush=True)
+try:
+    init_db()
+except Exception as e:
+    print(f"WARNING: Postgres unavailable, tasks endpoints will fail: {e}", flush=True)
+print("DEBUG: past init_db block", flush=True)
 
 app = FastAPI()
 
