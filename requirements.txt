@@ -22,3 +22,5 @@ tzdata==2026.3
 uvicorn==0.51.0
 
 playwright
+
+inngest

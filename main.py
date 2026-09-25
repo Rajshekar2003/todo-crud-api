@@ -422,3 +422,24 @@ def get_report_file(report_id: int):
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
     return FileResponse(row["path"], media_type="application/pdf", filename=f"report-{report_id}.pdf")
 # --- end PDF Report Generator (A8) ---
+
+# --- Inngest setup (A7 Stage 1) ---
+import datetime as _dt
+import inngest
+import inngest.fast_api
+
+inngest_client = inngest.Inngest(
+    app_id="report-api",
+    is_production=False,
+)
+
+@inngest_client.create_function(
+    fn_id="say-hello",
+    trigger=inngest.TriggerEvent(event="test/hello"),
+)
+async def say_hello(ctx: inngest.Context) -> str:
+    await ctx.step.sleep("wait-a-moment", _dt.timedelta(seconds=5))
+    return "Hello from the background!"
+
+inngest.fast_api.serve(app, inngest_client, [say_hello])
+# --- end Inngest setup ---
