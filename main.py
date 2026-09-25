@@ -487,11 +487,30 @@ async def make_report(ctx: inngest.Context) -> dict:
             raise Exception("The report oven is broken!")
         return {"topic": topic, "summary": f"A generated report about {topic}."}
 
-    result = await ctx.step.run("build-report", _build_report)
+    try:
+        result = await ctx.step.run("build-report", _build_report)
+    except Exception:
+        reports_store[report_id]["status"] = "failed"
+        raise
 
     reports_store[report_id]["status"] = "done"
     reports_store[report_id]["result"] = result
     return result
 
-inngest.fast_api.serve(app, inngest_client, [say_hello, make_report])
 # --- end background reports ---
+
+# --- Cron heartbeat (A7 Stage 4) ---
+@inngest_client.create_function(
+    fn_id="heartbeat",
+    trigger=inngest.TriggerCron(cron="* * * * *"),
+)
+async def heartbeat(ctx: inngest.Context) -> str:
+    pending = sum(1 for r in reports_store.values() if r["status"] == "pending")
+    done = sum(1 for r in reports_store.values() if r["status"] == "done")
+    failed = sum(1 for r in reports_store.values() if r["status"] == "failed")
+    summary = f"Reports - pending: {pending}, done: {done}, failed: {failed}"
+    ctx.logger.info(summary)
+    return summary
+
+inngest.fast_api.serve(app, inngest_client, [say_hello, make_report, heartbeat])
+# --- end cron heartbeat ---
