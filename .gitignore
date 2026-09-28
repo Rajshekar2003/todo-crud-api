@@ -4,3 +4,6 @@ body.json
 tasks.db
 .env
 logs/
+report.db
+reports/
+my-report.pdf
