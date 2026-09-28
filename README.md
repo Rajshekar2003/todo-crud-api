@@ -1,4 +1,4 @@
-# Todo CRUD API
+﻿# Todo CRUD API
 
 A backend REST API for managing a to-do list, built with FastAPI and PostgreSQL, with Supabase Auth securing user accounts and protected routes, and an LLM-backed enrichment endpoint.
 
@@ -9,6 +9,8 @@ Built as part of the FlyRank Backend Track internship, across several assignment
 - A4 - Authentication added with Supabase Auth: sign up, log in, log out, JWT verification, protected routes, and Swagger bearer-auth docs
 - A9 - A polite scraper built in scraper/ - fetches and validates book records from a public practice sandbox
 - A17 - An LLM-backed /enrich endpoint added: takes a scraped book record, returns a category, summary, and quality flags, with schema validation, retries, cost logging, and a kill switch
+- A8 - PDF report generator: SQL aggregation, HTML-to-PDF rendering via Playwright, served by link, idempotent generation
+- A7 - Background job: instant-response endpoint backed by an Inngest background job, a status endpoint, retries, and a cron heartbeat
 
 ## Tech stack
 
@@ -237,10 +239,49 @@ Also worth noting: when I deliberately edited the prompt to demand invalid categ
 
 A missing `topic` is a client input error (400) - retrying it would never succeed, so it's rejected immediately at the door with no job created. A `topic: "fail"` request, by contrast, is valid input hitting a transient-style failure inside the job - that's exactly what retries are for, so Inngest retries it (with backoff) before giving up.
 
-## Stage 3 notes
-
-A missing `topic` is a client input error (400) - retrying it would never succeed, so it's rejected immediately at the door with no job created. A `topic: "fail"` request, by contrast, is valid input hitting a transient-style failure inside the job - that's exactly what retries are for, so Inngest retries it (with backoff) before giving up.
-
 ## Stage 4 notes
 
 Every day at 08:00: `0 8 * * *`. Every Sunday at 22:00: `0 22 * * 0`.
+
+## A7 - Background job
+
+### What this is
+
+A small pipeline demonstrating the accept-fast-work-in-background-report-status pattern using Inngest: POST /background-reports returns instantly (well under a second) while an 8-second job runs in the background; a status endpoint polls pending to done; failures retry automatically; a cron function logs a heartbeat every minute.
+
+Note: this repo already used /reports for the A8 PDF generator, so A7's endpoints live at /background-reports instead, to avoid a route collision in the shared main.py.
+
+### How to run (three terminals)
+
+Terminal 1 - the API:
+```bash
+$env:INNGEST_DEV="1"
+uvicorn main:app --reload
+```
+
+Terminal 2 - the Inngest Dev Server (dashboard at http://localhost:8288):
+```bash
+npx inngest-cli@latest dev -u http://localhost:8000/api/inngest
+```
+
+Terminal 3 - free for curl.
+
+### Endpoints and functions
+
+| Type | Name | Trigger / Route | Description |
+|---|---|---|---|
+| Endpoint | POST /background-reports | HTTP | Accepts topic, returns pending status instantly; missing topic -> 400 |
+| Endpoint | GET /background-reports/{id} | HTTP | Returns pending, done+result, or failed; unknown id -> 404 |
+| Function | say-hello | event: test/hello | Stage 1 test function, sleeps 5s |
+| Function | make-report | event: report/requested | Sleeps 8s, builds report; retries twice on failure |
+| Function | heartbeat | cron: * * * * * | Every minute, logs pending/done/failed counts |
+
+### Proof - 202 then poll
+
+Request: POST /background-reports with topic cats -> immediate response {"id":"2-095631547344","status":"pending"}
+
+A few seconds later, GET /background-reports/2-095631547344 -> {"id":"2-095631547344","topic":"cats","status":"done","result":{"summary":"A generated report about cats.","topic":"cats"}}
+
+### Dashboard screenshot
+
+![Inngest dashboard runs](inngest-runs-screenshot.png)
